@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "2-57/5 * * * *"
   workflow_dispatch:
+    inputs:
+      force_failure:
+        description: "Создать тестовый инцидент"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,18 +24,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check public endpoints
         id: uptime
+        env:
+          FORCE_FAILURE: ${{ inputs.force_failure || false }}
         shell: bash
         run: |
           chmod +x check.sh
+          ok=false
           if REPORT_FILE="$RUNNER_TEMP/uptime-report.md" ./check.sh; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=false" >> "$GITHUB_OUTPUT"
+            ok=true
           fi
+          if [[ "$FORCE_FAILURE" == "true" ]]; then
+            echo "**Тестовая авария:** принудительно запрошена ручным запуском." >> "$RUNNER_TEMP/uptime-report.md"
+            ok=false
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/uptime-report.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open incident
