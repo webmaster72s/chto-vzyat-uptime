@@ -1,0 +1,70 @@
+name: External uptime monitor
+
+on:
+  schedule:
+    - cron: "2-57/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: chto-vzyat-uptime
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check public endpoints
+        id: uptime
+        shell: bash
+        run: |
+          chmod +x check.sh
+          if REPORT_FILE="$RUNNER_TEMP/uptime-report.md" ./check.sh; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$RUNNER_TEMP/uptime-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open incident
+        if: steps.uptime.outputs.ok != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_FILE: ${{ runner.temp }}/uptime-report.md
+        shell: bash
+        run: |
+          title='[Uptime] chto-vzyat.ru недоступен'
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json number,title --jq '.[] | select(.title == "[Uptime] chto-vzyat.ru недоступен") | .number' | head -n 1)"
+          if [[ -z "$issue" ]]; then
+            {
+              echo
+              echo "Workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            } >> "$REPORT_FILE"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body-file "$REPORT_FILE" --assignee "$GITHUB_REPOSITORY_OWNER"
+          fi
+
+      - name: Close incident after recovery
+        if: steps.uptime.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json number,title --jq '.[] | select(.title == "[Uptime] chto-vzyat.ru недоступен") | .number' | head -n 1)"
+          if [[ -n "$issue" ]]; then
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" \
+              --body "Сайт снова доступен. Восстановление подтверждено $(date -u '+%Y-%m-%d %H:%M:%S UTC')."
+            gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed
+          fi
+
+      - name: Mark failed run
+        if: steps.uptime.outputs.ok != 'true'
+        run: exit 1
